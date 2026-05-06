@@ -1,0 +1,10 @@
+streamlit
+pandas
+openpyxl
+pymupdf
+qrcode[pil]
+Pillow
+requests
+gspread
+google-auth
+ 
