@@ -1,6 +1,0 @@
-streamlit
-pandas
-openpyxl
-pymupdf
-qrcode[pil]
-Pillow
