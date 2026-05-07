@@ -10,7 +10,6 @@ try:
 except NameError:
     BASE_DIR = os.getcwd()
 
-ADMIN_PASSWORD = st.secrets.get("ADMIN_PASSWORD", "admin1234")
 SHEET_ID       = st.secrets.get("SHEET_ID", "")
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
@@ -218,12 +217,15 @@ def build_standard_table():
 logo_base64 = None  # run() 호출 시 초기화
 
 
-def run():
+def run(login_role=None):
     global logo_base64
-    # session_state 초기화
-    for k, v in {"is_admin": False, "edit_idx": None, "show_add_form": False,
-                 "nc_edit_idx": None, "nc_show_add": False, "nc_sel_idx": None,
-                 "show_login_form": False, "_pw_enter": ""}.items():
+    # login_role을 session_state에 동기화 (streamlit_app에서 전달받은 값 우선)
+    if login_role is not None:
+        st.session_state["login_role"] = login_role
+
+    # session_state 초기화 (is_admin 제거 — login_role로 대체)
+    for k, v in {"edit_idx": None, "show_add_form": False,
+                 "nc_edit_idx": None, "nc_show_add": False, "nc_sel_idx": None}.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
@@ -304,7 +306,13 @@ section[data-testid="stSidebarContent"] { padding-top: 1rem; }
 def render_header():
     logo = ("<img src=\"data:image/png;base64," + logo_base64 + "\" class=\"brand-logo\">"
             if logo_base64 else "<span style=\"color:#ccc;font-size:12px;\">[로고 미검출]</span>")
-    badge = "<span class=\"admin-badge\">🔓 관리자 모드</span>" if st.session_state.is_admin else ""
+    role = st.session_state.get("login_role", None)
+    if role == "admin":
+        badge = "<span class=\"admin-badge\">🔓 관리자 모드</span>"
+    elif role == "user":
+        badge = "<span class=\"admin-badge\" style='background:#4CAF50;'>👤 일반 사용자</span>"
+    else:
+        badge = ""
     st.markdown(
         "<div class=\"header-wrapper\">"
         "<div>" + logo + "</div>"
@@ -312,36 +320,19 @@ def render_header():
         "</div>", unsafe_allow_html=True)
 
 
-def render_admin_login():
-    """사이드바 관리자 로그인"""
+def render_role_status():
+    """사이드바 역할/로그인 상태 표시 (로그인은 홈에서만)"""
     st.sidebar.markdown("---")
-    if not st.session_state.is_admin:
-        # expander는 st.sidebar.expander로 생성하되,
-        # 내부 위젯은 st.xxx (sidebar 접두사 없이) — Streamlit 컨텍스트 규칙
-        with st.sidebar.expander("🔐 관리자 로그인", expanded=False):
-            pw = st.text_input(
-                "비밀번호", type="password", key="admin_pw_input",
-                help="입력 후 엔터 또는 로그인 버튼"
-            )
-            if st.button("로그인", key="admin_login_btn"):
-                if pw == ADMIN_PASSWORD:
-                    st.session_state.is_admin = True
-                    st.session_state["_pw_enter"] = ""
-                    st.rerun()
-                else:
-                    st.error("비밀번호가 틀렸습니다.")
-            # 엔터키 지원
-            if pw and pw == ADMIN_PASSWORD and st.session_state.get("_pw_enter") != pw:
-                st.session_state["_pw_enter"] = pw
-                st.session_state.is_admin = True
-                st.rerun()
-    else:
+    role = st.session_state.get("login_role", None)
+    if role == "admin":
         st.sidebar.markdown("🔓 **관리자 모드**")
-        if st.sidebar.button("🔒 관리자 로그아웃", key="admin_logout_btn"):
-            for k in ["is_admin", "edit_idx", "show_add_form",
-                      "nc_edit_idx", "nc_show_add", "nc_sel_idx", "_pw_enter"]:
-                st.session_state[k] = False if k == "is_admin" else None
-            st.rerun()
+    elif role == "user":
+        st.sidebar.markdown("👤 **일반 사용자**")
+    else:
+        st.sidebar.markdown(
+            "<span style='color:#9ca3af;font-size:12px;'>비로그인 상태 — 홈에서 로그인하세요</span>",
+            unsafe_allow_html=True
+        )
 
 
 # ── 탭1 렌더 ─────────────────────────────────────────────────────
@@ -421,7 +412,7 @@ def render_nc_detail(row, idx, df_nc):
     html += "</div>"
     st.markdown(html, unsafe_allow_html=True)
 
-    if st.session_state.is_admin:
+    if st.session_state.get("login_role") == "admin":
         a1, a2 = st.columns([1, 1])
         if a1.button("✏️ 수정", key="nc_edit_btn_" + str(idx)):
             st.session_state.nc_edit_idx = idx
@@ -537,12 +528,15 @@ def render_nc_edit_form(df, idx):
 
 # ── MAIN ─────────────────────────────────────────────────────────
 def main():
+    role = st.session_state.get("login_role", None)
+    is_admin = (role == "admin")
+
     # ── 사이드바: 탭 컨텍스트 밖에서 모든 사이드바 위젯 렌더 ──────
     if st.sidebar.button("← 홈으로 돌아가기", key="cutting_home_btn"):
         st.session_state.page = "home"
         st.rerun()
 
-    render_admin_login()
+    render_role_status()
 
     # 고객사 목록은 탭 밖에서 사이드바에 렌더 (탭 안에서 st.sidebar 호출 시 오류 발생)
     df_cust = load_customer_data()
@@ -550,7 +544,7 @@ def main():
 
     if df_cust is not None:
         st.sidebar.header("🏢 고객사 목록")
-        if st.session_state.is_admin:
+        if is_admin:
             if st.sidebar.button("➕ 고객사 추가", key="open_add_form"):
                 st.session_state.show_add_form = True
                 st.session_state.edit_idx = None
@@ -566,7 +560,7 @@ def main():
     # ── 본문 ────────────────────────────────────────────────────
     st.markdown("<div class=\"main-title\">📋 품질 통합 관리 시스템</div>", unsafe_allow_html=True)
 
-    if st.session_state.is_admin:
+    if is_admin:
         tab1, tab2, tab3, tab4 = st.tabs(["📄 고객 사양서", "⚖️ 품질 보증 기준", "🏭 제강사 정보", "🚨 부적합 관리"])
     else:
         tab1, tab2, tab3 = st.tabs(["📄 고객 사양서", "⚖️ 품질 보증 기준", "🏭 제강사 정보"])
@@ -578,14 +572,14 @@ def main():
             st.info("고객사 데이터를 불러올 수 없습니다.")
         elif sel_idx is None and not st.session_state.show_add_form and st.session_state.edit_idx is None:
             st.markdown("<div class=\"guide-text\">좌상단 화살표를 눌러 고객사를 선택하십시오.</div>", unsafe_allow_html=True)
-        elif st.session_state.is_admin and st.session_state.show_add_form:
+        elif is_admin and st.session_state.show_add_form:
             render_add_form(df_cust)
-        elif st.session_state.is_admin and st.session_state.edit_idx is not None:
+        elif is_admin and st.session_state.edit_idx is not None:
             render_edit_form(df_cust, st.session_state.edit_idx)
         elif sel_idx is not None:
             row = df_cust.iloc[sel_idx]
             st.markdown("<div class=\"customer-title\">■ " + str(row.iloc[0]) + "</div>", unsafe_allow_html=True)
-            if st.session_state.is_admin:
+            if is_admin:
                 a1, a2, _ = st.columns([1, 1, 8])
                 if a1.button("수정", key="edit_btn"):
                     st.session_state.edit_idx = sel_idx
