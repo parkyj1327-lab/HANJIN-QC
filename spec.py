@@ -9,6 +9,24 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
+# ── 계정 정의 (secrets 우선, 없으면 기본값) ──────────────────────
+ACCOUNTS = {
+    st.secrets.get("ADMIN_ID", "admin"): {
+        "password": st.secrets.get("ADMIN_PW", "admin1234"),
+        "role": "admin",          # 중간검사성적서 + 부적합관리 모두 접근
+    },
+    st.secrets.get("USER_ID", "user"): {
+        "password": st.secrets.get("USER_PW", "user1234"),
+        "role": "user",           # 중간검사성적서만 접근
+    },
+}
+
+# ── 로그인 세션 초기화 ────────────────────────────────────────────
+if "login_role" not in st.session_state:
+    st.session_state.login_role = None   # None | "user" | "admin"
+if "show_login_modal" not in st.session_state:
+    st.session_state.show_login_modal = False
+
 try:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 except NameError:
@@ -29,6 +47,20 @@ BG_B64 = "/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbn
 
 if "page" not in st.session_state:
     st.session_state.page = "home"
+
+# ── 로그인 처리 함수 ──────────────────────────────────────────────
+def try_login(uid, pw):
+    account = ACCOUNTS.get(uid.strip())
+    if account and pw == account["password"]:
+        st.session_state.login_role = account["role"]
+        st.session_state.show_login_modal = False
+        return True
+    return False
+
+def do_logout():
+    st.session_state.login_role = None
+    st.session_state.page = "home"
+    st.rerun()
 
 # ── 전역 CSS: 레이아웃·폰트만 (사이드바 숨김은 홈에서만) ──
 st.markdown("""
@@ -97,12 +129,57 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {
 
 
 def show_home():
+    role = st.session_state.login_role  # None | "user" | "admin"
+    show_coil = (role in ("user", "admin"))
+
     # 홈 페이지에서만 사이드바 숨김
     st.markdown("""
 <style>
 [data-testid="stSidebar"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
+
+    # ── 로그인 상태에 따른 배너 우측 콘텐츠 계산 ──────────────────
+    role_label = {"user": "👤 일반 사용자", "admin": "🔓 관리자"}.get(role, "")
+    if role:
+        banner_right = f"""
+  <!-- 배너 우측: 로그인 상태 -->
+  <div style="position:relative;z-index:2;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;gap:8px;min-width:200px;">
+    <div style="
+      background:rgba(255,255,255,0.10);
+      border:1px solid rgba(255,255,255,0.20);
+      border-radius:12px;
+      padding:14px 20px;
+      text-align:right;
+      backdrop-filter:blur(4px);
+    ">
+      <div style="font-size:11px;color:rgba(255,255,255,0.55);margin-bottom:4px;letter-spacing:0.05em;">로그인됨</div>
+      <div style="font-size:14px;font-weight:800;color:#FF8C00;">{role_label}</div>
+    </div>
+  </div>"""
+    else:
+        banner_right = """
+  <!-- 배너 우측: 로그인 유도 -->
+  <div style="position:relative;z-index:2;display:flex;flex-direction:column;align-items:flex-end;justify-content:flex-end;gap:8px;min-width:200px;">
+    <div style="
+      background:rgba(255,255,255,0.08);
+      border:1px solid rgba(255,255,255,0.18);
+      border-radius:12px;
+      padding:14px 20px;
+      text-align:right;
+      backdrop-filter:blur(4px);
+    ">
+      <div style="font-size:11px;color:rgba(255,255,255,0.50);margin-bottom:6px;">로그인하면 더 많은 기능을 이용할 수 있습니다</div>
+      <div id="hj-login-trigger" style="
+        display:inline-block;
+        background:linear-gradient(135deg,#FF8C00,#E65100);
+        color:white;font-size:13px;font-weight:700;
+        padding:8px 20px;border-radius:8px;cursor:pointer;
+        box-shadow:0 2px 8px rgba(255,140,0,0.35);
+        user-select:none;
+      " onclick="document.getElementById('hj-login-anchor').click();">🔐 로그인</div>
+    </div>
+  </div>"""
 
     st.markdown(f"""
 <style>
@@ -131,6 +208,19 @@ def show_home():
     position: relative;
     overflow: hidden;
 }}
+.hj-card-locked {{
+    background: #f8f9fa;
+    border-radius: 14px;
+    border: 1.5px solid #e8eaed;
+    box-shadow: none;
+    padding: 22px 22px 22px 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    position: relative;
+    overflow: hidden;
+    opacity: 0.65;
+}}
 .hj-card-badge {{
     background: #FFF3E0; color: #E65100;
     font-size: 10px; font-weight: 800;
@@ -140,6 +230,10 @@ def show_home():
 .hj-card-icon {{ font-size: 1.9rem; margin-bottom: 9px; }}
 .hj-card-title {{ font-size: 1.05rem; font-weight: 800; color: #1a1a2e; margin-bottom: 5px; }}
 .hj-card-desc {{ font-size: 0.78rem; color: #6b7280; line-height: 1.6; margin: 0; }}
+.hj-lock-icon {{ font-size:1.1rem; position:absolute; top:14px; right:16px; opacity:0.5; }}
+
+/* ── 배너 안 로그인 버튼 숨김 처리용 앵커 ── */
+#hj-login-anchor {{ display:none !important; }}
 
 /* ── 버튼 행: 카드 바로 아래 딱 붙이기 ── */
 [data-testid="stHorizontalBlock"] {{
@@ -224,26 +318,100 @@ def show_home():
     ">품질기술팀</div>
   </div>
 
-  <!-- 하단 텍스트 -->
-  <div style="position:relative;z-index:2;margin-top:14px;">
-    <div style="font-size:clamp(8px,2vw,10px);font-weight:700;color:#FF8C00;letter-spacing:0.2em;
-      text-transform:uppercase;margin-bottom:6px;">Quality Management System</div>
-    <div style="font-size:clamp(1.2rem,3.5vw,2rem);font-weight:900;color:#fff;
-      line-height:1.25;margin-bottom:6px;letter-spacing:-0.02em;word-break:keep-all;">
-      품질 통합 <span style="color:#FF8C00;">관리 시스템</span>
+  <!-- 하단: 왼쪽 텍스트 + 오른쪽 로그인 영역 -->
+  <div style="position:relative;z-index:2;margin-top:14px;display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap;">
+    <!-- 왼쪽 텍스트 -->
+    <div>
+      <div style="font-size:clamp(8px,2vw,10px);font-weight:700;color:#FF8C00;letter-spacing:0.2em;
+        text-transform:uppercase;margin-bottom:6px;">Quality Management System</div>
+      <div style="font-size:clamp(1.2rem,3.5vw,2rem);font-weight:900;color:#fff;
+        line-height:1.25;margin-bottom:6px;letter-spacing:-0.02em;word-break:keep-all;">
+        품질 통합 <span style="color:#FF8C00;">관리 시스템</span>
+      </div>
+      <div style="font-size:clamp(10px,2.5vw,12px);color:rgba(255,255,255,0.5);">아래에서 사용할 앱을 선택하세요</div>
     </div>
-    <div style="font-size:clamp(10px,2.5vw,12px);color:rgba(255,255,255,0.5);">아래에서 사용할 앱을 선택하세요</div>
+    {banner_right}
   </div>
 </div>
+""", unsafe_allow_html=True)
 
-<!-- ── 카드 ── -->
-<div class="hj-grid">
+    # ── 배너 안 로그인 버튼 → Streamlit 버튼 트리거 (비로그인 시) ──
+    # 숨겨진 Streamlit 버튼을 HTML onclick으로 클릭해서 rerun 유발
+    if not role:
+        # 완전히 숨겨진 실제 Streamlit 버튼
+        st.markdown('<div id="hj-login-anchor-wrap" style="height:0;overflow:hidden;margin:0;padding:0;">', unsafe_allow_html=True)
+        if st.button("LOGIN_TRIGGER", key="home_login_btn"):
+            st.session_state.show_login_modal = True
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+        # JS: 배너 안 div 클릭 → 숨겨진 버튼 클릭
+        st.markdown("""
+<script>
+(function() {
+  var trigger = document.getElementById('hj-login-trigger');
+  if (!trigger) return;
+  trigger.addEventListener('click', function() {
+    var btns = window.parent.document.querySelectorAll('button');
+    for (var i = 0; i < btns.length; i++) {
+      if (btns[i].innerText.trim() === 'LOGIN_TRIGGER') {
+        btns[i].click(); break;
+      }
+    }
+  });
+})();
+</script>
+""", unsafe_allow_html=True)
+
+    # 로그아웃 버튼 (로그인 상태일 때) — 배너 바로 아래 우측 정렬
+    if role:
+        lo_col1, lo_col2 = st.columns([8, 1])
+        with lo_col2:
+            if st.button("로그아웃", key="home_logout", use_container_width=True):
+                do_logout()
+
+    # ── 로그인 폼 (show_login_modal=True 일 때) ───────────────────
+    if st.session_state.show_login_modal:
+        with st.form("login_form", clear_on_submit=True):
+            fc1, fc2, fc3 = st.columns([1, 2, 1])
+            with fc2:
+                st.markdown("**🔐 로그인**")
+                uid = st.text_input("아이디", placeholder="아이디 입력", key="login_uid")
+                pw  = st.text_input("비밀번호", type="password", placeholder="비밀번호 입력", key="login_pw")
+                sb1, sb2 = st.columns(2)
+                submitted = sb1.form_submit_button("로그인", type="primary", use_container_width=True)
+                cancelled = sb2.form_submit_button("취소", use_container_width=True)
+            if submitted:
+                if try_login(uid, pw):
+                    st.success("로그인 성공!")
+                    st.rerun()
+                else:
+                    st.error("아이디 또는 비밀번호가 올바르지 않습니다.")
+            if cancelled:
+                st.session_state.show_login_modal = False
+                st.rerun()
+
+    # ── 카드 그리드 ───────────────────────────────────────────────
+    if show_coil:
+        coil_card = """
   <div class="hj-card">
     <div class="hj-card-badge">INSPECTION</div>
     <div class="hj-card-icon">📐</div>
     <div class="hj-card-title">중간검사성적서</div>
     <div class="hj-card-desc">재단일별 코일 실두께 측정 데이터<br>조회 및 현황 파악</div>
-  </div>
+  </div>"""
+    else:
+        coil_card = """
+  <div class="hj-card-locked">
+    <div class="hj-lock-icon">🔒</div>
+    <div class="hj-card-badge">INSPECTION</div>
+    <div class="hj-card-icon">📐</div>
+    <div class="hj-card-title">중간검사성적서</div>
+    <div class="hj-card-desc">로그인 후 이용 가능합니다</div>
+  </div>"""
+
+    st.markdown(f"""
+<div class="hj-grid">
+  {coil_card}
   <div class="hj-card">
     <div class="hj-card-badge">QUALITY</div>
     <div class="hj-card-icon">📋</div>
@@ -255,8 +423,10 @@ def show_home():
 
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("📐 중간검사성적서 들어가기", key="btn_coil",
-                     use_container_width=True, type="primary"):
+        coil_btn_label = "📐 중간검사성적서 들어가기" if show_coil else "🔒 로그인 후 이용 가능"
+        if st.button(coil_btn_label, key="btn_coil",
+                     use_container_width=True, type="primary",
+                     disabled=not show_coil):
             st.session_state.page = "coil"
             st.rerun()
     with col2:
@@ -284,8 +454,18 @@ if st.session_state.page == "home":
     show_home()
 elif st.session_state.page == "coil":
     _render_home_btn()
-    import app_coil
-    app_coil.run()
+    try:
+        import importlib, sys
+        if "app_coil" in sys.modules:
+            importlib.reload(sys.modules["app_coil"])
+        import app_coil
+        app_coil.run()
+    except Exception as _coil_err:
+        st.error(f"중간검사성적서 로드 오류: {_coil_err}")
+        st.info("app_coil.py 파일을 확인해주세요. run() 함수 밖에 Streamlit 위젯 코드가 없어야 합니다.")
+        if st.button("← 홈으로 돌아가기", key="coil_err_home"):
+            st.session_state.page = "home"
+            st.rerun()
 elif st.session_state.page == "cutting":
     # cutting 페이지: 상단배너 없음, 사이드바 강제 표시
     st.markdown("""
@@ -295,4 +475,5 @@ elif st.session_state.page == "cutting":
 </style>
 """, unsafe_allow_html=True)
     import app_cutting
-    app_cutting.run()
+    # 전역 로그인 역할을 cutting 모듈에 전달
+    app_cutting.run(login_role=st.session_state.login_role)
